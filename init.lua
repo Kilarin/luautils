@@ -28,7 +28,7 @@ function luautils.check_overlap(box1minp,box1maxp,box2minp,box2maxp)
 	if box1minp.x > box2maxp.x or box1maxp.x < box2minp.x or
 		 box1minp.y > box2maxp.y or box1maxp.y < box2minp.y or
 		 box1minp.z > box2maxp.z or box1maxp.z < box2minp.z then
-		 return valse
+		 return false
 	else return true
 	end --if
 end --check_overlap
@@ -42,6 +42,7 @@ end --check_overlap
 
 
 
+--returns true if point is inside the box defined by minp,maxp
 --********************************
 function luautils.point_in_box(point, minp,maxp)
 	return luautils.check_overlap(point,point, minp,maxp)
@@ -49,10 +50,40 @@ end --point_in_box
 
 
 
+--returns true if point(x,y,z) is inside the box defined by minp,maxp
 --********************************
 function luautils.xyz_in_box(x,y,z, minp,maxp)
 	return luautils.point_in_box({x=x,y=y,z=z}, minp,maxp)
 end --xyz_in_box
+
+
+
+--this function adjusts (trims) the secondary box to be inside the primary box
+--WARNING: this function assumes that the primary and secondary boxes overlap
+--if they dont, you will get back strange results.
+--********************************
+function luautils.box_intersection(primary_minp,primary_maxp, secondary_minp,secondary_maxp)
+	local minp={}
+	local maxp={}
+
+	minp.x=secondary_minp.x
+	if minp.x<primary_minp.x then minp.x=primary_minp.x end
+	maxp.x=secondary_maxp.x
+	if maxp.x>primary_maxp.x then maxp.x=primary_maxp.x end
+
+	minp.y=secondary_minp.y
+	if minp.y<primary_minp.y then minp.y=primary_minp.y end
+	maxp.y=secondary_maxp.y
+	if maxp.y>primary_maxp.y then maxp.y=primary_maxp.y end
+
+	minp.z=secondary_minp.z
+	if minp.z<primary_minp.z then minp.z=primary_minp.z end
+	maxp.z=secondary_maxp.z
+	if maxp.z>primary_maxp.z then maxp.z=primary_maxp.z end
+
+	return minp,maxp
+end --box_intersection
+
 
 
 --this rounds a number to a specific digit place.
@@ -74,16 +105,18 @@ end --round_digits
 --round digits on a position
 --********************************
 function luautils.round_digits_pos(pos,digits)
-	return {x=luautils.round_digits(pos.x,digits),y=luautils.round_digits(pos.y,digits),
+	if pos.z==nil then return {x=luautils.round_digits(pos.x,digits),y=luautils.round_digits(pos.y,digits)}
+	else return {x=luautils.round_digits(pos.x,digits),y=luautils.round_digits(pos.y,digits),
 					z=luautils.round_digits(pos.z,digits)}
+	end --if pos.z
 end --round_digits_pos
+
 
 
 --lua does not allow overloading functions, so you can not specify func(one,two) and func(one,two,three)
 --but lua parameters are all optional, so you can just define as func(one,two,three) and then inside
 --the function check to see if three==nil and respond accordingly.   This is used for rounddigits below
-
-
+--
 --this calculates the distance between two positions, 2D only, passing the x and z values directly
 --note that rounddigits is optional, if you call as just luautils.distance2d(x1,z1,x2,z2) it will not round
 --also, rounding is done AFTER the distance calculation, not before.  (does that matter?)
@@ -181,18 +214,23 @@ function luautils.pos_to_str(posin, separator, rounddigits)
 		local sep=","
 		if separator ~= nil then sep=separator end
 		local pos=posin
-		if rounddigits ~= nil then pos=luautils.round_pos(posin,rounddigits) end
-		return "("..pos.x..sep..pos.y..sep..pos.z..")"
+		if rounddigits ~= nil then pos=luautils.round_digits_pos(posin,rounddigits) end
+		if pos.z==nil then return "("..pos.x..sep..pos.y..")"
+		else return "("..pos.x..sep..pos.y..sep..pos.z..")"
+		end --if pos.z==nil
 	end --if
 end --pos_to_str
 
 
 
+--return true if position is ground content
+--********************************
 function luautils.is_ground_content(pos)
 	if minetest.registered_nodes[minetest.get_node(pos).name].is_ground_content then return true
 	else return false
 	end --if
 end --is_ground_content
+
 
 
 --return center of box given minp and maxp
@@ -206,12 +244,51 @@ function luautils.center_of_box(minp,maxp)
 end --center_of_box
 
 
+
 --remove trailing and leading whitespace from string.
 --from PiL2 20.4
 --********************************
 function luautils.trim(s)
-	return (s:gsub("^%s*(.-)%s*$", "%1"))
+	if s==nil then return nil 
+	else return (s:gsub("^%s*(.-)%s*$", "%1"))
+	end
 end
+
+
+
+--returns the next field from a string based on a seperator char
+--the first time you call this you should pass p=1 or p=nil
+--call as:
+--fld,p=luautils.next_field(str,":",p)
+--and keep passing it the same p (do not modify it) until p==nil
+--trim and num are optional.  pass "trim" or "notrim" and "num" or "str"
+--********************************
+function luautils.next_field(s,sep,p,trim,num)
+	--minetest.log("luautils-> next_field: s="..luautils.var_or_nil(s).." sep="..luautils.var_or_nil(sep).." p="..luautils.var_or_nil(p))
+	if p==nil then p=1 end
+	if s==nil or sep==nil or p>string.len(s) then return nil,nil end
+	if trim==nil or trim=="" then trim="NOTRIM" end
+	trim=string.upper(trim)
+	if num==nil or num=="" then num="STR" end
+	num=string.upper(num)
+
+	local oldp=p
+	p=string.find(s,sep,oldp)
+	--if we did not find another separator, then return everything to the end of the string
+	--and return p=nill so the user will know we are done.
+	local rtn=nil
+	if p==nil then rtn=string.sub(s,oldp) 
+	else --we found a separator
+		rtn=string.sub(s,oldp,p-1)
+		p=p+1
+		if p>string.len(s) then p=nil end --we are done
+	end --if p==nil
+	if rtn~=nil and trim=="TRIM" then rtn=luautils.trim(rtn) end
+	--if rtn~=nil and num=="NUM" then rtn=rtn+0 end
+	if rtn~=nil and num=="NUM" then rtn=tonumber(rtn) end
+	return rtn,p
+end --luautils.next_field
+
 
 
 --returns the variable, OR, the string "nil" if the variable is nil
@@ -222,6 +299,7 @@ function luautils.var_or_nil(var)
 	else return var
 	end --if
 end --var_or_nil
+
 
 
 --does string math
@@ -269,7 +347,6 @@ function luautils.string_math(str,vars)
 		tan = math.tan,
 		tanh = math.tanh,
 		}}    
-	 
 	--minetest.log(">>>string_math-> before str="..str)
 	local f=function() return loadstring("return "..str.."+0")() end
 
@@ -281,5 +358,59 @@ function luautils.string_math(str,vars)
 end  --string_math
 
 
+
+--pass in a maxp and a minp and this returns a tabel with the SIZE of the box
+--(so that x=length of x side, y=length of y side, and z=length of z size
+--********************************
+function luautils.box_size(minp,maxp)
+	local siz={}
+	--doing it in an ipairs loop like this means this will work for 2, 3, or 4, or any dimensional boxes
+	for k,v in pairs(minp) do 
+	  siz[k]=maxp[k]-minp[k]+1
+	  --minetest.log("box_size-> k="..k.." v="..v.." maxp[k]="..maxp[k].." minp[k]="..minp[k].." siz[k]="..siz[k])
+	end
+	return siz
+end --box_size
+
+
+--this is the same as box_size, except it returns the z value in the y field
+--this is useful for when you are trying to get 2D noise size, you want to drop 
+--the real y param and replace with z  (OH how I wish minetest used z for vertical coord!)
+--********************************
+function luautils.box_sizexz(minp,maxp)
+	local siz=luautils.box_size(minp,maxp)
+	siz.y=siz.z
+	siz.z=nil
+	return siz
+end --box_size
+
+
+
+
+--for debugging purposes, this prints out a table in a readable format.
+--not my code, copied from here:
+--https://stackoverflow.com/questions/9168058/how-to-dump-a-table-to-console
+--its recursive, so could potential run out of memory on large nested tables
+--********************************
+function luautils.log_table(t, s)
+	if t==nil then minetest.log((s or '')..' = nil')
+	else
+		for k, v in pairs(t) do
+			local kfmt = '["' .. tostring(k) ..'"]'
+			if type(k) ~= 'string' then
+				kfmt = '[' .. k .. ']'
+			end
+			local vfmt = '"'.. tostring(v) ..'"'
+			if type(v) == 'table' then
+				luautils.log_table(v, (s or '')..kfmt)
+			else
+				if type(v) ~= 'string' then
+					vfmt = tostring(v)
+				end
+				minetest.log(type(t)..(s or '')..kfmt..' = '..vfmt)
+			end --if type(v)==table
+		end --for k,v
+	end --if t==nil
+end--table_print
 
 
